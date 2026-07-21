@@ -7,6 +7,7 @@ import (
 	"github.com/google/cel-go/cel"
 	"github.com/google/cel-go/common/types"
 	"github.com/google/cel-go/common/types/ref"
+	"github.com/konflux-ci/tekton-kueue/pkg/common"
 	"k8s.io/apimachinery/pkg/util/validation"
 )
 
@@ -58,6 +59,8 @@ func createCELEnvironment() (*cel.Env, error) {
 		createMutationFunction("label", MutationTypeLabel, mutationRequestType),
 		createResourceMutationFunction("resource", MutationTypeResource, mutationRequestType),
 		createPriorityMutationFunction("priority", mutationRequestType),
+		createManagedByFunction("managedBy", mutationRequestType),
+		createMultiKueueFunction("multiKueue", mutationRequestType),
 		// Add string manipulation functions
 		createReplaceFunction("replace"),
 
@@ -212,6 +215,85 @@ func createPriorityMutationFunction(name string, returnType *cel.Type) cel.EnvOp
 				}
 
 				return types.NewStringInterfaceMap(types.DefaultTypeAdapter, mutationMap)
+			}),
+		),
+	)
+}
+
+// createManagedByFunction creates a CEL function that sets the PipelineRun's managedBy field to any value.
+// Usage: managedBy("my-custom-controller.io")
+func createManagedByFunction(name string, returnType *cel.Type) cel.EnvOption {
+	return cel.Function(
+		name,
+		cel.Overload(
+			name+"_string_to_mutation",
+			[]*cel.Type{cel.StringType},
+			returnType,
+			cel.UnaryBinding(func(val ref.Val) ref.Val {
+				value, valueOk := val.Value().(string)
+				if !valueOk {
+					return types.NewErr("%s function requires string argument", name)
+				}
+				if value == "" {
+					return types.NewErr("%s value cannot be empty", name)
+				}
+
+				mutationMap := map[string]interface{}{
+					"type":  string(MutationTypeManagedBy),
+					"key":   "managedBy",
+					"value": value,
+				}
+				return types.NewStringInterfaceMap(types.DefaultTypeAdapter, mutationMap)
+			}),
+		),
+	)
+}
+
+// createMultiKueueFunction creates a CEL function with two overloads for MultiKueue routing.
+// Zero-arg: multiKueue() — sets managedBy to the MultiKueue value.
+// Single-arg: multiKueue(queueName) — sets managedBy AND overrides the queue label.
+func createMultiKueueFunction(name string, returnType *cel.Type) cel.EnvOption {
+	listReturnType := cel.ListType(returnType)
+
+	return cel.Function(
+		name,
+		cel.Overload(
+			name+"_to_mutation",
+			[]*cel.Type{},
+			returnType,
+			cel.FunctionBinding(func(args ...ref.Val) ref.Val {
+				mutationMap := map[string]interface{}{
+					"type":  string(MutationTypeManagedBy),
+					"key":   "managedBy",
+					"value": common.ManagedByMultiKueueLabel,
+				}
+				return types.NewStringInterfaceMap(types.DefaultTypeAdapter, mutationMap)
+			}),
+		),
+		cel.Overload(
+			name+"_string_to_mutation_list",
+			[]*cel.Type{cel.StringType},
+			listReturnType,
+			cel.UnaryBinding(func(val ref.Val) ref.Val {
+				queueName, queueOk := val.Value().(string)
+				if !queueOk {
+					return types.NewErr("%s function requires string argument for queue name", name)
+				}
+				if queueName == "" {
+					return types.NewErr("%s queue name cannot be empty", name)
+				}
+
+				managedByMap := types.NewStringInterfaceMap(types.DefaultTypeAdapter, map[string]interface{}{
+					"type":  string(MutationTypeManagedBy),
+					"key":   "managedBy",
+					"value": common.ManagedByMultiKueueLabel,
+				})
+				queueMap := types.NewStringInterfaceMap(types.DefaultTypeAdapter, map[string]interface{}{
+					"type":  string(MutationTypeLabel),
+					"key":   common.QueueLabel,
+					"value": queueName,
+				})
+				return types.DefaultTypeAdapter.NativeToValue([]ref.Val{managedByMap, queueMap})
 			}),
 		),
 	)

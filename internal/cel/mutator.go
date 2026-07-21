@@ -6,6 +6,7 @@ import (
 	"strconv"
 
 	tekv1 "github.com/tektoncd/pipeline/pkg/apis/pipeline/v1"
+	"k8s.io/utils/ptr"
 )
 
 // CELMutator applies mutations to PipelineRun objects based on compiled CEL programs.
@@ -161,6 +162,8 @@ func mutate(pipelineRun *tekv1.PipelineRun, mutation *MutationRequest) (*tekv1.P
 
 		// Store the summed value back as string
 		pipelineRun.Annotations[mutation.Key] = strconv.Itoa(newValue)
+	case MutationTypeManagedBy:
+		pipelineRun.Spec.ManagedBy = ptr.To(mutation.Value)
 	}
 	return pipelineRun, nil
 }

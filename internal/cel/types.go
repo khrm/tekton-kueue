@@ -14,6 +14,7 @@ const (
 	MutationTypeAnnotation MutationType = "annotation"
 	MutationTypeLabel      MutationType = "label"
 	MutationTypeResource   MutationType = "resource"
+	MutationTypeManagedBy  MutationType = "managedBy"
 )
 
 // IsValid checks if the mutation type is valid
@@ -28,7 +29,7 @@ func (mt MutationType) String() string {
 
 // ValidTypes returns all valid mutation types
 func ValidTypes() []MutationType {
-	return []MutationType{MutationTypeAnnotation, MutationTypeLabel, MutationTypeResource}
+	return []MutationType{MutationTypeAnnotation, MutationTypeLabel, MutationTypeResource, MutationTypeManagedBy}
 }
 
 // UnmarshalJSON implements json.Unmarshaler interface with validation

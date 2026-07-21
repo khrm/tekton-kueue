@@ -34,6 +34,10 @@ func TestCompileCELPrograms_TypeSafety(t *testing.T) {
 				`resource("example.com/cpu", 1000)`,
 				`[annotation("key1", "value1"), label("key2", "value2")]`,
 				`priority("high")`,
+				`managedBy("custom-controller.io")`,
+				`multiKueue()`,
+				`multiKueue("mk-queue")`,
+				`[multiKueue(), annotation("k", "v")]`,
 			},
 			expectErr: false,
 		},
@@ -156,6 +160,21 @@ func TestValidateExpressionReturnType_ValidCases(t *testing.T) {
 			name:        "valid priority in list",
 			expression:  `[priority("medium"), annotation("queue", "default")]`,
 			description: "Returns list<map<string, any>> with priority and annotation",
+		},
+		{
+			name:        "valid managedBy function",
+			expression:  `managedBy("custom-value")`,
+			description: "Returns map<string, any> representing managedBy MutationRequest",
+		},
+		{
+			name:        "valid multiKueue function",
+			expression:  `multiKueue()`,
+			description: "Returns map<string, any> representing multiKueue MutationRequest",
+		},
+		{
+			name:        "valid multiKueue with queue",
+			expression:  `multiKueue("mk-queue")`,
+			description: "Returns list<map<string, any>> representing multiKueue + queue MutationRequests",
 		},
 		{
 			name:        "valid single resource",
@@ -688,6 +707,169 @@ func TestResourceFunction_ErrorCases(t *testing.T) {
 			g.Expect(err.Error()).To(ContainSubstring(tt.errorMsg), "Error message should contain expected text")
 		})
 	}
+}
+
+func TestManagedByFunction(t *testing.T) {
+	g := NewWithT(t)
+
+	env, err := createCELEnvironment()
+	g.Expect(err).NotTo(HaveOccurred())
+
+	tests := []struct {
+		name       string
+		expression string
+		expected   map[string]interface{}
+	}{
+		{
+			name:       "managedBy with custom value",
+			expression: `managedBy("my-custom-controller.io")`,
+			expected: map[string]interface{}{
+				"type":  "managedBy",
+				"key":   "managedBy",
+				"value": "my-custom-controller.io",
+			},
+		},
+		{
+			name:       "managedBy with multikueue value",
+			expression: `managedBy("kueue.x-k8s.io/multikueue")`,
+			expected: map[string]interface{}{
+				"type":  "managedBy",
+				"key":   "managedBy",
+				"value": "kueue.x-k8s.io/multikueue",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			g := NewWithT(t)
+
+			ast, issues := env.Compile(tt.expression)
+			g.Expect(issues.Err()).NotTo(HaveOccurred())
+
+			program, err := env.Program(ast)
+			g.Expect(err).NotTo(HaveOccurred())
+
+			result, _, err := program.Eval(map[string]interface{}{})
+			g.Expect(err).NotTo(HaveOccurred())
+			g.Expect(result).NotTo(BeNil())
+
+			resultMap, ok := result.Value().(map[string]interface{})
+			g.Expect(ok).To(BeTrue(), "Result should be a map")
+			g.Expect(resultMap).To(Equal(tt.expected))
+		})
+	}
+}
+
+func TestManagedByFunction_ErrorCases(t *testing.T) {
+	g := NewWithT(t)
+
+	env, err := createCELEnvironment()
+	g.Expect(err).NotTo(HaveOccurred())
+
+	tests := []struct {
+		name       string
+		expression string
+		errorMsg   string
+	}{
+		{
+			name:       "managedBy with empty value",
+			expression: `managedBy("")`,
+			errorMsg:   "managedBy value cannot be empty",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			g := NewWithT(t)
+
+			ast, issues := env.Compile(tt.expression)
+			g.Expect(issues.Err()).NotTo(HaveOccurred())
+
+			program, err := env.Program(ast)
+			g.Expect(err).NotTo(HaveOccurred())
+
+			_, _, err = program.Eval(map[string]interface{}{})
+			g.Expect(err).To(HaveOccurred())
+			g.Expect(err.Error()).To(ContainSubstring(tt.errorMsg))
+		})
+	}
+}
+
+func TestMultiKueueFunction(t *testing.T) {
+	g := NewWithT(t)
+
+	env, err := createCELEnvironment()
+	g.Expect(err).NotTo(HaveOccurred())
+
+	t.Run("zero-arg returns managedBy mutation", func(t *testing.T) {
+		g := NewWithT(t)
+
+		ast, issues := env.Compile(`multiKueue()`)
+		g.Expect(issues.Err()).NotTo(HaveOccurred())
+
+		program, err := env.Program(ast)
+		g.Expect(err).NotTo(HaveOccurred())
+
+		result, _, err := program.Eval(map[string]interface{}{})
+		g.Expect(err).NotTo(HaveOccurred())
+		g.Expect(result).NotTo(BeNil())
+
+		resultMap, ok := result.Value().(map[string]interface{})
+		g.Expect(ok).To(BeTrue(), "Result should be a map")
+		g.Expect(resultMap).To(Equal(map[string]interface{}{
+			"type":  "managedBy",
+			"key":   "managedBy",
+			"value": "kueue.x-k8s.io/multikueue",
+		}))
+	})
+
+	t.Run("single-arg returns list of managedBy and queue mutations", func(t *testing.T) {
+		g := NewWithT(t)
+
+		ast, issues := env.Compile(`multiKueue("mk-queue")`)
+		g.Expect(issues.Err()).NotTo(HaveOccurred())
+
+		program, err := env.Program(ast)
+		g.Expect(err).NotTo(HaveOccurred())
+
+		result, _, err := program.Eval(map[string]interface{}{})
+		g.Expect(err).NotTo(HaveOccurred())
+		g.Expect(result).NotTo(BeNil())
+
+		mutations, err := convertToMutationRequests(result)
+		g.Expect(err).NotTo(HaveOccurred())
+		g.Expect(mutations).To(HaveLen(2))
+
+		g.Expect(mutations[0].Type).To(Equal(MutationTypeManagedBy))
+		g.Expect(mutations[0].Key).To(Equal("managedBy"))
+		g.Expect(mutations[0].Value).To(Equal("kueue.x-k8s.io/multikueue"))
+
+		g.Expect(mutations[1].Type).To(Equal(MutationTypeLabel))
+		g.Expect(mutations[1].Key).To(Equal("kueue.x-k8s.io/queue-name"))
+		g.Expect(mutations[1].Value).To(Equal("mk-queue"))
+	})
+}
+
+func TestMultiKueueFunction_ErrorCases(t *testing.T) {
+	g := NewWithT(t)
+
+	env, err := createCELEnvironment()
+	g.Expect(err).NotTo(HaveOccurred())
+
+	t.Run("single-arg with empty queue name", func(t *testing.T) {
+		g := NewWithT(t)
+
+		ast, issues := env.Compile(`multiKueue("")`)
+		g.Expect(issues.Err()).NotTo(HaveOccurred())
+
+		program, err := env.Program(ast)
+		g.Expect(err).NotTo(HaveOccurred())
+
+		_, _, err = program.Eval(map[string]interface{}{})
+		g.Expect(err).To(HaveOccurred())
+		g.Expect(err.Error()).To(ContainSubstring("multiKueue queue name cannot be empty"))
+	})
 }
 
 func TestResourceFunctionIntegration(t *testing.T) {
