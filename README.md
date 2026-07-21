@@ -261,6 +261,19 @@ cel:
     - 'pacEventType == "push" ? annotation("trigger", "push-event") : annotation("trigger", "other-event")'
     - 'pacTestEventType != "" ? label("test-type", pacTestEventType) : label("test-type", "none")'
     
+    # managedBy - set Spec.ManagedBy to a custom controller
+    - 'managedBy("tekton.dev/pipeline")'
+    
+    # multiKueue - route to spoke cluster via MultiKueue
+    - 'multiKueue()'
+    
+    # multiKueue with queue - route to spoke AND override queue name
+    - 'multiKueue("multikueue-queue")'
+    
+    # Conditional routing - builds to spoke, releases stay on hub
+    - 'has(pipelineRun.metadata.labels) && "pipeline-type" in pipelineRun.metadata.labels && pipelineRun.metadata.labels["pipeline-type"] == "build" ? multiKueue("multikueue-queue") : []'
+    - 'has(pipelineRun.metadata.labels) && "pipeline-type" in pipelineRun.metadata.labels && pipelineRun.metadata.labels["pipeline-type"] == "release" ? [managedBy("tekton.dev/pipeline")] : []'
+    
     # Multiline CEL expression for multiple mutations
     # This expression applies several annotations and labels in one go
     - |
